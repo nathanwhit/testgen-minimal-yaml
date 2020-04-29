@@ -131,12 +131,12 @@ impl_from_yaml_for_yamlkind!(&Yaml<'_>);
 impl_from_yaml_for_yamlkind!(&mut Yaml<'_>);
 
 #[derive(Debug, Clone, Default)]
-struct IEntry<'a> {
-    key: IYaml<'a>,
-    value: IYaml<'a>,
+struct IEntry {
+    key: IYaml,
+    value: IYaml,
 }
 
-impl<'a> From<Entry<'a>> for IEntry<'a> {
+impl<'a> From<Entry<'a>> for IEntry {
     fn from(other: Entry<'a>) -> Self {
         Self {
             key: other.key.into(),
@@ -145,35 +145,35 @@ impl<'a> From<Entry<'a>> for IEntry<'a> {
     }
 }
 
-impl<'a> From<IEntry<'a>> for Entry<'a> {
-    fn from(other: IEntry<'a>) -> Self {
+impl<'a, 'b: 'a> From<&'b IEntry> for Entry<'a> {
+    fn from(other: &'b IEntry) -> Self {
         Self {
-            key: other.key.into(),
-            value: other.value.into(),
+            key: (&other.key).into(),
+            value: (&other.value).into(),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-enum IYaml<'a> {
-    Scalar(&'a str),
-    Sequence(Vec<IYaml<'a>>),
-    Mapping(Vec<IEntry<'a>>),
+enum IYaml {
+    Scalar(String),
+    Sequence(Vec<IYaml>),
+    Mapping(Vec<IEntry>),
     Dummy,
     EndSeq,
     EndMap,
 }
 
-impl<'a> Default for IYaml<'a> {
+impl Default for IYaml {
     fn default() -> Self {
         Self::Dummy
     }
 }
 
-impl<'a> From<Yaml<'a>> for IYaml<'a> {
+impl<'a> From<Yaml<'a>> for IYaml {
     fn from(other: Yaml<'a>) -> Self {
         match other {
-            Yaml::Scalar(s) => Self::Scalar(s),
+            Yaml::Scalar(s) => Self::Scalar(s.into()),
             Yaml::Sequence(seq) => Self::Sequence(seq.into_iter().map(Self::from).collect()),
             Yaml::Mapping(mapping) => {
                 Self::Mapping(mapping.into_iter().map(IEntry::from).collect())
@@ -181,14 +181,12 @@ impl<'a> From<Yaml<'a>> for IYaml<'a> {
         }
     }
 }
-impl<'a> From<IYaml<'a>> for Yaml<'a> {
-    fn from(other: IYaml<'a>) -> Self {
+impl<'a, 'b: 'a> From<&'b IYaml> for Yaml<'a> {
+    fn from(other: &'b IYaml) -> Self {
         match other {
-            IYaml::Scalar(s) => Self::Scalar(s),
-            IYaml::Sequence(seq) => Self::Sequence(seq.into_iter().map(Self::from).collect()),
-            IYaml::Mapping(mapping) => {
-                Self::Mapping(mapping.into_iter().map(Entry::from).collect())
-            }
+            IYaml::Scalar(s) => Self::Scalar(&s),
+            IYaml::Sequence(seq) => Self::Sequence(seq.iter().map(Self::from).collect()),
+            IYaml::Mapping(mapping) => Self::Mapping(mapping.iter().map(Entry::from).collect()),
             _ => panic!("Internal structure shouldn't exist here!"),
         }
     }
@@ -211,7 +209,7 @@ fn pop_if_match<'a, 'b>(
     }
 }
 
-fn parse_event_to_iyaml<'a>(buf: &'a str) -> Result<Vec<IYaml<'a>>, TestgenError> {
+fn parse_event_to_iyaml(buf: &str) -> Result<Vec<IYaml>, TestgenError> {
     let mut lines = buf.lines();
     let mut stack: Vec<IYaml> = Vec::new();
     for line in lines {
@@ -234,11 +232,18 @@ fn parse_event_to_iyaml<'a>(buf: &'a str) -> Result<Vec<IYaml<'a>>, TestgenError
                 "VAL" => {
                     let content: &str = &rest[4..];
                     if content.starts_with(':') {
-                        let val = content.trim_start_matches(':');
-                        stack.push(IYaml::Scalar(val));
-                    } else {
+                        let val = &content[1..];
+                        stack.push(IYaml::Scalar(val.into()));
+                    } else if content.starts_with('\'') {
+                        let mut content = String::from(content);
+                        content.push('\'');
                         stack.push(IYaml::Scalar(content));
-                        // return Err(format!("Test event contains tags -- {}", content).into());
+                    } else if content.starts_with('\"') {
+                        let mut content = String::from(content);
+                        content.push('\"');
+                        stack.push(IYaml::Scalar(content));
+                    } else {
+                        stack.push(IYaml::Scalar(content.into()))
                     }
                 }
                 _ => return Err(format!("Expected VAL, found {}", typ).into()),
@@ -295,7 +300,7 @@ fn parse_seq(stack: &mut Vec<IYaml>) -> Result<(), TestgenError> {
     }
 }
 
-fn parse_test_event<'a, 'b>(test: &'a Test, buf: &'b str) -> Result<Yaml<'b>, TestgenError> {
+fn parse_test_event(test: &Test, buf: &str) -> Result<IYaml, TestgenError> {
     let mut stack = parse_event_to_iyaml(&buf).map_err(|e| {
         format!(
             "{} error occurred while parsing test {:?}",
@@ -319,14 +324,14 @@ fn parse_test_event<'a, 'b>(test: &'a Test, buf: &'b str) -> Result<Yaml<'b>, Te
                     test
                 )
             })?,
-            IYaml::Scalar(..) => return Ok(element.into()),
+            IYaml::Scalar(..) => return Ok(element),
             _ => return Err("Expected a mapping or sequence at the top-level".into()),
         }
     } else {
-        return Ok(Yaml::Sequence(vec![]));
+        return Ok(IYaml::Sequence(vec![]));
     }
-
-    Ok(stack.pop().unwrap().into())
+    let v = stack.pop().unwrap();
+    Ok(v)
 }
 
 fn filter_tests<'a>(
