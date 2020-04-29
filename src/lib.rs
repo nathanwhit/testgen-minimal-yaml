@@ -362,7 +362,7 @@ pub fn yaml_test_gen(input: ProcTokenStream) -> ProcTokenStream {
                     .map_err(|e| eprintln!("{}", e))
                     .ok();
                 let expected = match expected {
-                    Some(yml) => serde_json::to_string(&yml).unwrap(),
+                    Some(yml) => bincode::serialize(&Yaml::from(&yml)).unwrap(),
                     // Some(yml) => syn::parse_str::<syn::Expr>(yml.to_string()),
                     None => return None,
                 };
@@ -372,6 +372,10 @@ pub fn yaml_test_gen(input: ProcTokenStream) -> ProcTokenStream {
                     test.name.replace('.', "_").to_snake_case(),
                     test.id
                 );
+                let mut expected_str = String::new();
+                let mut expected_item = quote! {
+                    vec![#(#expected),*]
+                };
                 // println!("Test name = {}", test_name);
                 quote! {
                     #[test]
@@ -383,9 +387,9 @@ pub fn yaml_test_gen(input: ProcTokenStream) -> ProcTokenStream {
                         let mut file = std::fs::File::open(#test_pth).unwrap();
                         let mut buf = String::new();
                         file.read_to_string(&mut buf).unwrap();
-                        // println!("{}", buf);
+                        let exp_lit = #expected_item;
                         let res = crate::parse(&buf).unwrap();
-                        let expected: Yaml = serde_json::from_str(#expected).unwrap();
+                        let expected: Yaml = bincode::deserialize(&exp_lit).unwrap();
                         assert_eq!(expected, res);
                     }
                 }
