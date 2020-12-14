@@ -11,10 +11,11 @@ use regex::RegexSetBuilder;
 use serde::Serialize;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use syn::LitStr;
 use walkdir::{DirEntry, WalkDir};
+use syn::parse::{self, Parse, ParseStream};
 
 use derive_builder::Builder;
 
@@ -92,7 +93,6 @@ fn collect_tests<P: AsRef<Path>>(path: P) -> Result<Vec<Test>, TestgenError> {
             }
         } else if entry.file_type().is_dir() {
             let built_test = builder.build();
-            // println!("{:?}", built_test);
             if let Ok(test) = built_test {
                 tests.push(test)
             }
@@ -347,10 +347,27 @@ fn filter_tests<'a>(
         .collect())
 }
 
+struct YamlTestGen {
+    in_path: LitStr,
+    out_path: LitStr,
+}
+
+impl Parse for YamlTestGen {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let in_path = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let out_path = input.parse()?;
+        Ok(Self {
+            in_path,
+            out_path
+        })
+    }
+}
+
 #[proc_macro]
 pub fn yaml_test_gen(input: ProcTokenStream) -> ProcTokenStream {
-    let raw_path = syn::parse::<LitStr>(input).unwrap().value();
-    let path = PathBuf::from(raw_path);
+    let args = syn::parse_macro_input!(input as YamlTestGen);
+    let path = PathBuf::from(args.in_path.value());
     let tests = collect_tests(path).unwrap();
     let filtered_tests = filter_tests(
         &tests,
@@ -404,9 +421,17 @@ pub fn yaml_test_gen(input: ProcTokenStream) -> ProcTokenStream {
     });
 
     let decl = quote! {
+        #[allow(non_snake_case, unused)]
         mod yaml_test_suite {
             #(#test_decls)*
         }
     };
-    decl.into()
+    let out = PathBuf::from(args.out_path.value());
+    let mut out_file = File::create(out).unwrap();
+    out_file.write_all(&decl.to_string().as_bytes()).unwrap();
+    // decl.into()
+    let incl = quote! {
+        include!("./yaml_test_suite.rs");
+    };
+    incl.into()
 }
